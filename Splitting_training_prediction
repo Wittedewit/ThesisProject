@@ -1,0 +1,2695 @@
+# Importing the necessary library to mount Google Drive
+from google.colab import drive
+
+# Mounting Google Drive to access files from it
+drive.mount('/content/drive')
+
+# Listing the files in the 'Master_Thesis' folder
+!ls "/content/drive/MyDrive/Master_Thesis/"
+
+! pip install torchmetrics
+
+! pip install patchify
+
+
+
+# Importing necessary libraries
+import datetime  # for working with dates and times
+import math  # for performing mathematical operations
+import os  # for working with the operating system
+from enum import Enum  # for defining enumerated types
+
+import cv2  # for working with images
+import matplotlib.pyplot as plt  # for visualizing data
+import numpy as np  # for working with numerical data
+from PIL import Image  # for working with images
+from patchify import patchify, unpatchify  # for dividing images into patches and merging them
+from sklearn.model_selection import train_test_split  # for splitting the data into training and testing sets
+
+# Importing Keras module
+import keras
+from keras import backend as K  # for working with Keras
+from keras.callbacks import ModelCheckpoint, CSVLogger, EarlyStopping  # for saving the model and logging
+from keras.models import Model, load_model  # for building and loading models
+from keras.layers import Input, Conv2D, MaxPooling2D, concatenate, Conv2DTranspose, Dropout, Rescaling, BatchNormalization, AveragePooling2D, UpSampling2D # for the creation of the deep learning model
+from keras.utils import to_categorical  # for converting labels to one-hot encoding
+
+# Importing tqdm for showing progress bars
+from tqdm import tqdm
+Image.MAX_IMAGE_PIXELS = 1000000000
+import torchmetrics
+import tensorflow as tf
+
+X = dataset['image']
+Y = dataset['label']
+# X_test = np.array(dataset['test']['image'])
+# Y_test = np.array(dataset['test']['label'])
+
+print((Y[0].size[0] // 512) * 512)
+
+Y[1].shape
+
+print(X[0])
+
+for i in range(15):
+  plt.imshow(X[i])
+  plt.imshow(Y[i])
+
+plt.imshow(Y[1])
+
+#Create the folder paths that will be used in this notebook
+pnoa  = "PNOA"
+base_folder = "/content/drive/MyDrive/Master_Thesis/root_dir/"
+img_folder = os.path.join(base_folder,pnoa, "drone/")
+gt_folder = os.path.join(base_folder,pnoa, "mask")
+model_save_path = "/content/drive/MyDrive/Master_Thesis/Modelmap/"
+
+print(os.path.join(base_folder, 'mask', 'F1.png'))
+
+patch_size = 512
+#instances = []
+#import imageio as iio
+max_colors = 1000000
+# read an image
+#image_mask = Image.open("/content/drive/MyDrive/Master_Thesis/root_dir/masks/F1.png")
+image_mask = Image.open("/content/drive/MyDrive/Master_Thesis/root_dir/images/F1.png")
+#image_mask = cv2.imread("/content/drive/MyDrive/Master_Thesis/root_dir/masks/F1.png")
+
+unique_colors = image_mask.getcolors(maxcolors=max_colors)
+
+#unique_colors = np.unique(image_mask.reshape(-1, image_mask.shape[2]), axis=0)
+print(unique_colors)
+
+"""##Unet Model"""
+
+def get_unet_model(img_height, img_width, img_channels, n_classes):
+    # input layer shape is equal to patch image size
+    inputs = Input(shape=(img_height, img_width, img_channels))
+
+    # rescale images from (0, 255) to (0, 1)
+    rescale = Rescaling(scale=1. / 255, input_shape=(img_height, img_width, img_channels))(inputs)
+
+    # Contraction path
+    c1 = Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(rescale)
+    c1 = Dropout(0.1)(c1)
+    c1 = Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c1)
+    p1 = MaxPooling2D((2, 2))(c1)
+
+    c2 = Conv2D(32, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(p1)
+    c2 = Dropout(0.1)(c2)
+    c2 = Conv2D(32, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c2)
+    p2 = MaxPooling2D((2, 2))(c2)
+
+    c3 = Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(p2)
+    c3 = Dropout(0.2)(c3)
+    c3 = Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c3)
+    p3 = MaxPooling2D((2, 2))(c3)
+
+    c4 = Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(p3)
+    c4 = Dropout(0.2)(c4)
+    c4 = Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c4)
+    p4 = MaxPooling2D(pool_size=(2, 2))(c4)
+
+    c5 = Conv2D(256, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(p4)
+    c5 = Dropout(0.3)(c5)
+    c5 = Conv2D(256, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c5)
+
+    # Expansive path
+    u6 = Conv2DTranspose(128, (2, 2), strides=(2, 2), padding='same')(c5)
+    u6 = concatenate([u6, c4])
+    c6 = Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(u6)
+    c6 = Dropout(0.2)(c6)
+    c6 = Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c6)
+
+    u7 = Conv2DTranspose(64, (2, 2), strides=(2, 2), padding='same')(c6)
+    u7 = concatenate([u7, c3])
+    c7 = Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(u7)
+    c7 = Dropout(0.2)(c7)
+    c7 = Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c7)
+
+    u8 = Conv2DTranspose(32, (2, 2), strides=(2, 2), padding='same')(c7)
+    u8 = concatenate([u8, c2])
+    c8 = Conv2D(32, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(u8)
+    c8 = Dropout(0.1)(c8)
+    c8 = Conv2D(32, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c8)
+
+    u9 = Conv2DTranspose(16, (2, 2), strides=(2, 2), padding='same')(c8)
+    u9 = concatenate([u9, c1], axis=3)
+    c9 = Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(u9)
+    c9 = Dropout(0.1)(c9)
+    c9 = Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c9)
+
+    outputs = Conv2D(filters=n_classes, kernel_size=(1, 1), activation="softmax")(c9)
+
+    return Model(inputs=[inputs], outputs=[outputs])
+
+"""##ResNET Model"""
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class ResNet(nn.Module):
+    def __init__(self, in_channels, out_channels, patch_size):
+        super().__init__()
+        self.patch_size = patch_size
+
+        self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+
+        self.layer1 = self._make_layer(64, 3)
+        self.layer2 = self._make_layer(128, 4, stride=2)
+        self.layer3 = self._make_layer(256, 6, stride=2)
+        self.layer4 = self._make_layer(512, 3, stride=2)
+
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(512 * self._get_patch_count(patch_size)**2, out_channels)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+
+        return x
+
+    def _make_layer(self, planes, blocks, stride=1):
+        layers = []
+        layers.append(BasicBlock(self.patch_size, planes, stride))
+        for _ in range(1, blocks):
+            layers.append(BasicBlock(self.patch_size, planes))
+        return nn.Sequential(*layers)
+
+    def _get_patch_count(self, patch_size):
+        return int(224 / patch_size)
+
+class BasicBlock(nn.Module):
+    def __init__(self, patch_size, planes, stride=1):
+        super().__init__()
+        self.patch_size = patch_size
+        self.conv1 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
+
+    def forward(self, x):
+        identity = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        identity = self._pad(identity)
+        out += identity
+        out = self.relu(out)
+
+        return out
+
+    def _pad(self, x):
+        c, h, w = x.size(1), x.size(2), x.size(3)
+        ph = (self.patch_size - h % self.patch_size) % self.patch_size
+        pw = (self.patch_size - w % self.patch_size) % self.patch_size
+        padding = (0, pw, 0, ph)
+        return F.pad(x, padding)
+
+#
+
+def data_generator(image_list, mask_list):
+    dataset = tf.data.Dataset.from_tensor_slices((image_list, mask_list))
+    dataset = dataset.map(load_data, num_parallel_calls=tf.data.AUTOTUNE)
+    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+    return dataset
+
+
+train_dataset = data_generator(X_train, Y_train)
+val_dataset = data_generator(X_test, T_test)
+
+print("Train Dataset:", train_dataset)
+print("Val Dataset:", val_dataset)
+
+def convolution_block(
+    block_input,
+    num_filters=256,
+    kernel_size=3,
+    dilation_rate=1,
+    padding="same",
+    use_bias=False,
+):
+    x = Conv2D(
+        num_filters,
+        kernel_size=kernel_size,
+        dilation_rate=dilation_rate,
+        padding="same",
+        use_bias=use_bias,
+        kernel_initializer=keras.initializers.HeNormal(),
+    )(block_input)
+    x = BatchNormalization()(x)
+    return tf.nn.relu(x)
+
+
+def DilatedSpatialPyramidPooling(dspp_input):
+    dims = dspp_input.shape
+    x = AveragePooling2D(pool_size=(dims[-3], dims[-2]))(dspp_input)
+    x = convolution_block(x, kernel_size=1, use_bias=True)
+    out_pool = UpSampling2D(
+        size=(dims[-3] // x.shape[1], dims[-2] // x.shape[2]),
+        interpolation="bilinear",
+    )(x)
+
+    out_1 = convolution_block(dspp_input, kernel_size=1, dilation_rate=1)
+    out_6 = convolution_block(dspp_input, kernel_size=3, dilation_rate=6)
+    out_12 = convolution_block(dspp_input, kernel_size=3, dilation_rate=12)
+    out_18 = convolution_block(dspp_input, kernel_size=3, dilation_rate=18)
+
+    x = layers.Concatenate(axis=-1)([out_pool, out_1, out_6, out_12, out_18])
+    output = convolution_block(x, kernel_size=1)
+    return output
+
+patch_size = 512
+NUM_CLASSES = 4
+def DeeplabV3Plus(image_size, num_classes):
+    model_input = keras.Input(shape=(image_size, image_size, 3))
+    resnet50 = keras.applications.ResNet50(
+        weights="imagenet", include_top=False, input_tensor=model_input
+    )
+    x = resnet50.get_layer("conv4_block6_2_relu").output
+    x = DilatedSpatialPyramidPooling(x)
+
+    input_a = layers.UpSampling2D(
+        size=(image_size // 4 // x.shape[1], image_size // 4 // x.shape[2]),
+        interpolation="bilinear",
+    )(x)
+    input_b = resnet50.get_layer("conv2_block3_2_relu").output
+    input_b = convolution_block(input_b, num_filters=48, kernel_size=1)
+
+    x = layers.Concatenate(axis=-1)([input_a, input_b])
+    x = convolution_block(x)
+    x = convolution_block(x)
+    x = layers.UpSampling2D(
+        size=(image_size // x.shape[1], image_size // x.shape[2]),
+        interpolation="bilinear",
+    )(x)
+    model_output = layers.Conv2D(num_classes, kernel_size=(1, 1), padding="same")(x)
+    return keras.Model(inputs=model_input, outputs=model_output)
+
+
+model = DeeplabV3Plus(image_size=patch_size, num_classes=NUM_CLASSES)
+model.summary()
+
+loss = keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+model.compile(
+    optimizer=keras.optimizers.Adam(learning_rate=0.001),
+    loss=loss,
+    metrics=["accuracy"],
+)
+
+history = model.fit(train_dataset, validation_data=val_dataset, epochs=25)
+
+plt.plot(history.history["loss"])
+plt.title("Training Loss")
+plt.ylabel("loss")
+plt.xlabel("epoch")
+plt.show()
+
+plt.plot(history.history["accuracy"])
+plt.title("Training Accuracy")
+plt.ylabel("accuracy")
+plt.xlabel("epoch")
+plt.show()
+
+plt.plot(history.history["val_loss"])
+plt.title("Validation Loss")
+plt.ylabel("val_loss")
+plt.xlabel("epoch")
+plt.show()
+
+plt.plot(history.history["val_accuracy"])
+plt.title("Validation Accuracy")
+plt.ylabel("val_accuracy")
+plt.xlabel("epoch")
+plt.show()
+
+"""## Deepglobe training"""
+
+# Deepglobe
+# =======================================================
+# List preprocessing
+
+def load_images_and_patchify(image, patch_size, yes):
+    """
+    :param patch_size: image patchify square size
+    :param directory_path: path to root directory containing training and test images
+    :return: list of images from directory
+    """
+
+    # initialize empty list for images
+    instances = []
+    # iterate through files in directory
+    size_x = (image.size[1] // patch_size) * patch_size  # width to the nearest size divisible by patch size
+    size_y = (image.size[0] // patch_size) * patch_size  # height to the nearest size divisible by patch size
+
+    #image = Image.fromarray(image)
+    #print('patch')
+    # Crop original image to size divisible by patch size from top left corner
+    image = image.crop((0, 0, size_x, size_y))
+
+    if yes:
+      image = image.convert('RGB')
+
+    image = np.array(image)
+
+
+    # Extract patches from each image, step=patch_size means no overlap
+    patch_img = patchify(image, (patch_size, patch_size, 3), step=patch_size)
+
+    # iterate over vertical patch axis
+    for j in range(patch_img.shape[0]):
+        # iterate over horizontal patch axis
+        for k in range(patch_img.shape[1]):
+            # patches are located like a grid. use (j, k) indices to extract single patched image
+            single_patch_img = patch_img[j, k]
+
+            # Drop extra dimension from patchify
+            instances.append(np.squeeze(single_patch_img))
+    #print('here')
+    #og_img = unpatchify(instances, image)
+    return instances, size_x, size_y
+
+def reshape_images(instances):
+    """
+    :param instances: list of images
+    :return: reshaped images
+    """
+    for j in range(len(instances)):
+        instances[j] = instances[j].reshape(-1, 1)
+    return instances
+
+
+def get_minimum_image_size(instances):
+    """
+    :param instances: list of images
+    :return: min and max dimensions out of all images
+    """
+
+    # initialize minimum values to infinity
+    min_x = math.inf
+    min_y = math.inf
+
+    # loop through each instance
+    for image in instances:
+        # check min x (rows)
+        min_x = image.shape[0] if image.shape[0] < min_x else min_x
+
+        # check min y (columns)
+        min_y = image.shape[1] if image.shape[1] < min_y else min_y
+
+    return min_x, min_y
+
+
+def display_images(instances, rows=2, titles=None):
+    """
+    :param instances:  list of images
+    :param rows: number of rows in subplot
+    :param titles: subplot titles
+    :return:
+    """
+    n = len(instances)
+    cols = n // rows if (n / rows) % rows == 0 else (n // rows) + 1
+
+    # iterate through images and display subplots
+    for j, image in enumerate(instances):
+        plt.subplot(rows, cols, j + 1)
+        plt.title('') if titles is None else plt.title(titles[j])
+        plt.axis("off")
+        plt.imshow(image)
+
+    # show the figure
+    plt.show()
+
+# mask color codes DEepglobe
+class MaskColorMap(Enum):
+    Urban_land = (0, 255, 255)
+    Agriculture_land = (255, 255, 0)
+    Rangeland = (255, 0, 255)
+    Forest_land = (0, 255, 0)
+    Water = (0, 0, 255)
+    Barren_land = (255, 255, 255)
+    Unknown = (0, 0, 0)
+
+#DeepGlobe training
+# =====================================================
+# prepare training data input images
+
+def get_training_data(deepglobeX, deepglobeY):
+    # initialise lists
+    image_dataset, mask_dataset = [], []
+
+    # define image patch size
+    patch_size = 512
+
+    # walk through root directory
+    for imageX in tqdm(deepglobeX):
+      img, size_x, size_y = load_images_and_patchify(imageX, patch_size=patch_size, yes=False)
+      image_dataset.extend(img)
+
+    print('looped through image')
+      # extract training label masks and patchify
+    for imageY in tqdm(deepglobeY):
+      img, size_x, size_y = load_images_and_patchify(imageY, patch_size=patch_size, yes=True)
+      mask_dataset.extend(img)
+
+    #display_images(og_img, og_mask)
+    # return input images and masks
+    return np.array(image_dataset), np.array(mask_dataset)
+
+
+def create_binary_segmentation_problem(image_dataset, mask_dataset):
+    # change problem to binary segmentation problem
+    x_reduced, y_reduced = [], []
+
+    # iterate over masks
+    for j, mask in tqdm(enumerate(mask_dataset)):
+
+        # get image shape
+        _img_height, _img_width, _img_channels = mask.shape
+
+        # create binary image (zeros)
+        binary_image = np.zeros((_img_height, _img_width, 1)).astype(int)
+
+        # iterate over each pixel in mask
+        for row in range(_img_height):
+            for col in range(_img_width):
+                # get image channel across axis=3
+                rgb = mask[row, col, :]
+
+                # building hex: #3C1098 = RGB(60, 16, 152) or BGR(152, 16, 60)
+                binary_image[row, col] = 1 if rgb[0] == 255 and rgb[1] == 255 and rgb[2] == 255 else 0
+
+        # only keep images with a high percentage of building coverage
+        if np.count_nonzero(binary_image == 1) > 0.15 * binary_image.size:
+            x_reduced.append(image_dataset[j])
+            y_reduced.append(binary_image)
+
+    # return binary image dataset
+    return np.array(x_reduced), np.array(y_reduced)
+
+
+
+
+# def one_hot_encode_masks(masks, num_classes):
+#     """
+#     :param masks: Y_train patched mask dataset
+#     :param num_classes: number of classes
+#     :return:
+#     """
+#     # initialise list for integer encoded masks
+#     integer_encoded_labels = []
+
+#     # iterate over each mask
+#     for mask in tqdm(masks):
+
+#         # get image shape
+#         _img_height, _img_width, _img_channels = mask.shape
+
+#         # create new mask of zeros
+#         encoded_image = np.zeros((_img_height, _img_width, 1)).astype(int)
+
+#         for j, cls in enumerate(MaskColorMap):
+#             encoded_image[np.all(mask == cls.value, axis=-1)] = j
+
+#         # append encoded image
+#         integer_encoded_labels.append(encoded_image)
+
+#     # return one-hot encoded labels
+#     return to_categorical(y=integer_encoded_labels, num_classes=num_classes)
+
+def one_hot_encode_masks(masks, num_classes, tolerance=5):
+    """
+    :param masks: Y_train patched mask dataset
+    :param num_classes: number of classes
+    :param tolerance: maximum absolute difference between pixel values and class color values to consider a match
+    :return: one-hot encoded labels
+    """
+    # initialise list for integer encoded masks
+    integer_encoded_labels = []
+
+    # iterate over each mask
+    for mask in tqdm(masks):
+
+        # get image shape
+        _img_height, _img_width, _img_channels = mask.shape
+
+        # create new mask of zeros
+        encoded_image = np.zeros((_img_height, _img_width, num_classes)).astype(int)
+
+        # iterate over each class
+        for j, cls in enumerate(MaskColorMap):
+            # check if each pixel in mask matches class color within tolerance
+            color_match = np.isclose(mask, cls.value, atol=tolerance).all(axis=-1)
+            # update encoded image for all matching pixels
+            encoded_image[color_match, j] = 1
+
+        # append encoded image
+        integer_encoded_labels.append(encoded_image)
+
+    # return one-hot encoded labels
+    return np.array(integer_encoded_labels)
+
+"""##UAV Training"""
+
+# UAV
+# =======================================================
+# image preprocessing
+
+def load_images_and_patchify(directory_path, patch_size):
+    """
+    :param patch_size: image patchify square size
+    :param directory_path: path to root directory containing training and test images
+    :return: list of images from directory
+    """
+
+    # initialize empty list for images
+    instances = []
+    # iterate through files in directory
+    for file_number, filepath in tqdm(enumerate(os.listdir(directory_path))):
+        extension = filepath.split(".")[-1]
+        if extension == "jpg" or extension == "png":
+
+            # current image path
+            img_path = rf"{directory_path}/{filepath}"
+
+            print('were loading')
+            # Reads image as BGR
+            image = cv2.imread(img_path)
+            print('locked and loaded')
+
+            # convert image to RBG
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            #om image kleiner te maken
+            image= Image.fromarray(image)
+            image = np.array(image.crop((0, 0, 10000, 10000)))
+
+
+
+            size_x = (image.shape[1] // patch_size) * patch_size  # width to the nearest size divisible by patch size
+            size_y = (image.shape[0] // patch_size) * patch_size  # height to the nearest size divisible by patch size
+
+
+            image = Image.fromarray(image)
+
+
+
+            # Crop original image to size divisible by patch size from top left corner
+            image = np.array(image.crop((0, 0, size_x, size_y)))
+
+            # Extract patches from each image, step=patch_size means no overlap
+            patch_img = patchify(image, (patch_size, patch_size, 3), step=patch_size)
+
+            # iterate over vertical patch axis
+            for j in range(patch_img.shape[0]):
+                # iterate over horizontal patch axis
+                for k in range(patch_img.shape[1]):
+                    # patches are located like a grid. use (j, k) indices to extract single patched image
+                    single_patch_img = patch_img[j, k]
+
+                    # Drop extra dimension from patchify
+                    instances.append(np.squeeze(single_patch_img))
+
+
+    #og_img = unpatchify(instances, image)
+    return instances, size_x, size_y
+
+def reshape_images(instances):
+    """
+    :param instances: list of images
+    :return: reshaped images
+    """
+    for j in range(len(instances)):
+        instances[j] = instances[j].reshape(-1, 1)
+    return instances
+
+
+def get_minimum_image_size(instances):
+    """
+    :param instances: list of images
+    :return: min and max dimensions out of all images
+    """
+
+    # initialize minimum values to infinity
+    min_x = math.inf
+    min_y = math.inf
+
+    # loop through each instance
+    for image in instances:
+        # check min x (rows)
+        min_x = image.shape[0] if image.shape[0] < min_x else min_x
+
+        # check min y (columns)
+        min_y = image.shape[1] if image.shape[1] < min_y else min_y
+
+    return min_x, min_y
+
+
+def display_images(instances, rows=2, titles=None):
+    """
+    :param instances:  list of images
+    :param rows: number of rows in subplot
+    :param titles: subplot titles
+    :return:
+    """
+    n = len(instances)
+    cols = n // rows if (n / rows) % rows == 0 else (n // rows) + 1
+
+    # iterate through images and display subplots
+    for j, image in enumerate(instances):
+        plt.subplot(rows, cols, j + 1)
+        plt.title('') if titles is None else plt.title(titles[j])
+        plt.axis("off")
+        plt.imshow(image)
+
+    # show the figure
+    plt.show()
+
+"""
+
+Each satellite image is paired with a mask image for land cover annotation. The mask is a RGB image with 7 classes of labels, using color-coding (R, G, B) as follows.
+
+    Urban land: 0,255,255 - Man-made, built up areas with human artifacts (can ignore roads for now which is hard to label)
+    Agriculture land: 255,255,0 - Farms, any planned (i.e. regular) plantation, cropland, orchards, vineyards, nurseries, and ornamental horticultural areas; confined feeding operations.
+    Rangeland: 255,0,255 - Any non-forest, non-farm, green land, grass
+    Forest land: 0,255,0 - Any land with x% tree crown density plus clearcuts.
+    Water: 0,0,255 - Rivers, oceans, lakes, wetland, ponds.
+    Barren land: 255,255,255 - Mountain, land, rock, dessert, beach, no vegetation
+    Unknown: 0,0,0 - Clouds and others
+
+"""
+
+# mask color codes UAV
+class MaskColorMap(Enum):
+    Water = (51, 51, 51)
+    Roads = (17, 17, 17)
+    Bushes = (34, 34, 34)
+    Ground = (68,68,68)
+    background = (0, 0, 0)
+
+#[(87387192, 0), (16114772, 17), (50494240, 34), (1086956, 51), (88422712, 68)]
+
+# mask color codes UAV
+class MaskColorMap(Enum):
+    Water = (83, 83, 83)
+    Roads = (35, 35, 35)
+    Bushes = (61, 61, 61)
+    background = (0, 0, 0)
+
+# mask color codes UAV
+class MaskColorMap(Enum):
+    Water = (0, 0, 255)
+    Roads = (100, 100, 100)
+    Bushes = (0, 255, 0)
+    background = (0, 102, 51)
+
+for j, cls in enumerate(MaskColorMap):
+  print(j)
+  #print(cls.value)
+
+# =====================================================
+# prepare training data input images
+
+def get_training_data(root_directory):
+    # initialise lists
+    image_dataset, mask_dataset = [], []
+
+    # define image patch size
+    patch_size = 512
+
+
+    # walk through root directory
+    for path, directories, files in os.walk(root_directory):
+        print(directories)
+        for subdirectory in directories:
+
+            # extract training input images and patchify
+            if subdirectory == "images":
+                img ,size_x, size_y = load_images_and_patchify(os.path.join(path, subdirectory), patch_size=patch_size)
+                image_dataset.extend(img)
+                #
+
+            # extract training label masks and patchify
+            elif subdirectory == "masks":
+                mask,mask_size_x, mask_size_y = load_images_and_patchify(os.path.join(path, subdirectory), patch_size=patch_size)
+                mask_dataset.extend(mask)
+                #
+    #display_images(og_img, og_mask)
+    # return input images and masks
+    return np.array(image_dataset), np.array(mask_dataset), mask_size_x, mask_size_y
+
+
+def create_binary_segmentation_problem(image_dataset, mask_dataset):
+    # change problem to binary segmentation problem
+    x_reduced, y_reduced = [], []
+
+    # iterate over masks
+    for j, mask in tqdm(enumerate(mask_dataset)):
+
+        # get image shape
+        _img_height, _img_width, _img_channels = mask.shape
+
+        # create binary image (zeros)
+        binary_image = np.zeros((_img_height, _img_width, 1)).astype(int)
+
+        # iterate over each pixel in mask
+        for row in range(_img_height):
+            for col in range(_img_width):
+                # get image channel across axis=3
+                rgb = mask[row, col, :]
+
+                # building hex: #3C1098 = RGB(60, 16, 152) or BGR(152, 16, 60)
+                binary_image[row, col] = 1 if rgb[0] == 61 and rgb[1] == 61 and rgb[2] == 61 else 0
+                print(binary_image)
+        # only keep images with a high percentage of building coverage
+        if np.count_nonzero(binary_image == 1) > 0.15 * binary_image.size:
+            x_reduced.append(image_dataset[j])
+            y_reduced.append(binary_image)
+
+    # return binary image dataset
+    return np.array(x_reduced), np.array(y_reduced)
+
+
+# def one_hot_encode_masks(masks, num_classes, tolerance=5):
+#     """
+#     :param masks: Y_train patched mask dataset
+#     :param num_classes: number of classes
+#     :param tolerance: maximum absolute difference between pixel values and class color values to consider a match
+#     :return: one-hot encoded labels
+#     """
+#     # initialise list for integer encoded masks
+#     integer_encoded_labels = []
+
+#     # iterate over each mask
+#     for mask in tqdm(masks):
+
+#         # get image shape
+#         _img_height, _img_width, _img_channels = mask.shape
+
+#         # create new mask of zeros
+#         encoded_image = np.zeros((_img_height, _img_width, num_classes)).astype(int)
+
+#         # iterate over each class
+#         for j, cls in enumerate(MaskColorMap):
+#             # check if each pixel in mask matches class color within tolerance
+#             color_match = np.isclose(mask, cls.value, atol=tolerance).all(axis=-1)
+#             # update encoded image for all matching pixels
+#             encoded_image[color_match, j] = 1
+
+#         # append encoded image
+#         integer_encoded_labels.append(encoded_image)
+
+#     # return one-hot encoded labels
+#     return np.array(integer_encoded_labels)
+
+
+
+def one_hot_encode_masks(masks, num_classes):
+    """
+    :param masks: Y_train patched mask dataset
+    :param num_classes: number of classes
+    :return:
+    """
+    # initialise list for integer encoded masks
+    integer_encoded_labels = []
+
+    # iterate over each mask
+    for mask in tqdm(masks):
+
+        # get image shape
+        _img_height, _img_width, _img_channels = mask.shape
+
+        # create new mask of zeros
+        encoded_image = np.zeros((_img_height, _img_width, 1)).astype(int)
+
+        for j, cls in enumerate(MaskColorMap):
+            encoded_image[np.all(mask == cls.value, axis=-1)] = j
+
+        # append encoded image
+        integer_encoded_labels.append(encoded_image)
+
+    # return one-hot encoded labels
+    return to_categorical(y=integer_encoded_labels, num_classes=num_classes)
+
+
+# def one_hot_encode_masks(image_dataset, masks, num_classes):
+#     """
+#     :param masks: Y_train patched mask dataset
+#     :param num_classes: number of classes
+#     :param background_threshold: threshold for the percentage of background pixels in the segmented image
+#     :return:
+#     """
+
+#     background_threshold = 92
+#     # initialise list for integer encoded masks
+#     integer_encoded_labels = []
+#     x_reduced = []
+
+#     # iterate over each mask
+#     for j, mask in tqdm(enumerate(masks)):
+
+#         # get image shape
+#         _img_height, _img_width, _img_channels = mask.shape
+
+#         # create new mask of zeros
+#         encoded_image = np.zeros((_img_height, _img_width, 1)).astype(int)
+
+#         for k, cls in enumerate(MaskColorMap):
+#             encoded_image[np.all(mask == cls.value, axis=-1)] = k
+#             print('this is the encoded Image', encoded_image)
+#         # calculate the percentage of background pixels
+#         background_pixels = np.count_nonzero(encoded_image == 0)
+
+#         total_pixels = encoded_image.shape[0] * encoded_image.shape[1]
+#         print('thi is the image shape : ',encoded_image.shape)
+#         background_percentage = (background_pixels / total_pixels) * 100
+#         print('This is the background percentage : ', background_percentage)
+
+#         print('Background percentage : ',background_percentage, '>',  'background threshold', background_threshold)
+#         # only keep images with a low percentage of background pixels
+#         if background_percentage > background_threshold:
+#             continue
+
+#         # append encoded image and corresponding original image
+#         integer_encoded_labels.append(encoded_image)
+#         x_reduced.append(image_dataset[j])
+
+
+#     # return one-hot encoded labels
+#     return to_categorical(y=integer_encoded_labels, num_classes=num_classes), x_reduced
+
+"""##Continuation"""
+
+# =====================================================
+# output directories
+
+# datetime for filename saving
+dt_now = str(datetime.datetime.now()).replace(".", "_").replace(":", "_")
+model_img_save_path = f"{os.getcwd()}/models/final_aerial_segmentation_{dt_now}.png"
+#model_save_path = f"{os.getcwd()}/models/final_aerial_segmentation_{dt_now}.hdf5"
+model_checkpoint_filepath = os.getcwd() + "/models/weights-improvement-{epoch:02d}-{val_accuracy:.2f}.hdf5"
+csv_logger = os.path.join(base_folder, "csv_logger")
+
+# =======================================================
+# training metrics
+
+# Mean Intersection-Over-Union: iou = true_positives / (true_positives + false_positives + false_negatives)
+def iou_coefficient(y_true, y_pred, smooth=1):
+    intersection = K.sum(K.abs(y_true * y_pred), axis=[1, 2, 3])
+    union = K.sum(y_true, [1, 2, 3]) + K.sum(y_pred, [1, 2, 3]) - intersection
+    iou = K.mean((intersection + smooth) / (union + smooth), axis=0)
+    return iou
+
+
+# jaccard similarity: the size of the intersection divided by the size of the union of two sets
+def jaccard_index(y_true, y_pred):
+    y_true_f = K.flatten(y_true)
+    y_pred_f = K.flatten(y_pred)
+    intersection = K.sum(y_true_f * y_pred_f)
+    return (intersection + 1.0) / (K.sum(y_true_f) + K.sum(y_pred_f) - intersection + 1.0)
+
+"""Number of classes changes depending on the training
+4 for uav, 7 for deepglobe
+"""
+
+#Deepglobe
+# =====================================================
+# get training data
+
+# number of classes in segmentation dataset
+n_classes = 7
+
+# create (X, Y) training data
+X_data, Y_data = get_training_data(X, Y)
+
+
+# extract X_train shape parameters
+m, img_height, img_width, img_channels = X_data.shape
+print('number of patched image training data:', m)
+
+# display images from both training and test sets
+display_count = 6
+random_index = [np.random.randint(0, m) for _ in range(display_count)]
+sample_images = [x for z in zip(list(X_data[random_index]), list(Y_data[random_index])) for x in z]
+display_images(sample_images, rows=2)
+
+# convert RGB values to integer encoded labels for categorical_crossentropy
+Y_data = one_hot_encode_masks(Y_data, num_classes=n_classes)
+#split dataset
+X_train, X_test, Y_train, Y_test = train_test_split(X_data, Y_data, test_size=4, random_state=4)
+
+# =====================================================
+# get training data
+
+# number of classes in segmentation dataset
+n_classes = 5
+
+# dataset directory
+data_dir = base_folder
+
+# create (X, Y) training data
+X, Y, mask_size_x, mask_size_y = get_training_data(root_directory=data_dir)
+#
+# extract X_train shape parameters
+m, img_height, img_width, img_channels = X.shape
+print('number of patched image training data:', m)
+
+# display images from both training and test sets
+display_count = 6
+random_index = [np.random.randint(0, m) for _ in range(display_count)]
+sample_images = [x for z in zip(list(X[random_index]), list(Y[random_index])) for x in z]
+display_images(sample_images, rows=2)
+
+# convert RGB values to integer encoded labels for categorical_crossentropy
+#Y, X = one_hot_encode_masks(X, Y, num_classes=n_classes)
+
+Y = one_hot_encode_masks( Y, num_classes=n_classes)
+
+# split dataset into training and test groups
+X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.10, random_state=42)
+
+# display images from both training and test sets
+# display_count = 6
+# random_index = [np.random.randint(0, m) for _ in range(display_count)]
+# sample_images = [x for z in zip(list(X_train[random_index]), list(Y_train[random_index])) for x in z]
+# display_images(sample_images, rows=2)
+
+np.unique(Y_train)
+
+# =====================================================
+# define U-Net model architecture
+
+def build_unet(img_shape):
+    # input layer shape is equal to patch image size
+    inputs = Input(shape=img_shape)
+
+    # rescale images from (0, 255) to (0, 1)
+    rescale = Rescaling(scale=1. / 255, input_shape=(img_height, img_width, img_channels))(inputs)
+    previous_block_activation = rescale  # Set aside residual
+
+    contraction = {}
+    # # Contraction path: Blocks 1 through 5 are identical apart from the feature depth
+    for f in [16, 32, 64, 128]:
+        x = Conv2D(f, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(
+            previous_block_activation)
+        x = Dropout(0.1)(x)
+        x = Conv2D(f, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(x)
+        contraction[f'conv{f}'] = x
+        x = MaxPooling2D((2, 2))(x)
+        previous_block_activation = x
+
+    c5 = Conv2D(160, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(
+        previous_block_activation)
+    c5 = Dropout(0.2)(c5)
+    c5 = Conv2D(160, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c5)
+    previous_block_activation = c5
+
+    # Expansive path: Second half of the network: upsampling inputs
+    for f in reversed([16, 32, 64, 128]):
+        x = Conv2DTranspose(f, (2, 2), strides=(2, 2), padding='same')(previous_block_activation)
+        x = concatenate([x, contraction[f'conv{f}']])
+        x = Conv2D(f, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(x)
+        x = Dropout(0.2)(x)
+        x = Conv2D(f, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(x)
+        previous_block_activation = x
+
+    outputs = Conv2D(filters=n_classes, kernel_size=(1, 1), activation="softmax")(previous_block_activation)
+
+    return Model(inputs=inputs, outputs=outputs)
+
+#class_weights = [100, 50, 30, 1]
+# build model
+model = build_unet(img_shape=(img_height, img_width, img_channels))
+model.summary()
+
+from tensorflow.keras.backend import flatten
+import tensorflow.keras.backend as K
+
+smooth = 1.
+def dice_coef(y_true, y_pred):
+    y_true_f = flatten(y_true)
+    y_pred_f = flatten(y_pred)
+    intersection = K.sum(y_true_f * y_pred_f)
+    return (2. * intersection + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
+
+def dice_coef_loss(y_true, y_pred):
+    return 1 - dice_coef(y_true, y_pred)
+
+np.unique(Y_train)
+
+def weightedLoss(originalLossFunc, weightsList):
+
+    def lossFunc(true, pred):
+
+        axis = -1 #if channels last
+        #axis=  1 #if channels first
+
+        true = K.cast(true, 'int32')
+        pred = K.cast(pred, 'int32')
+
+        #argmax returns the index of the element with the greatest value
+        #done in the class axis, it returns the class index
+        classSelectors = K.argmax(true, axis=axis)
+            #if your loss is sparse, use only true as classSelectors
+
+        #considering weights are ordered by class, for each class
+        #true(1) if the class index is equal to the weight index
+        classSelectors = [K.equal(i, classSelectors) for i in range(len(weightsList))]
+
+        #casting boolean to float for calculations
+        #each tensor in the list contains 1 where ground true class is equal to its index
+        #if you sum all these, you will get a tensor full of ones.
+        classSelectors = [K.cast(x, K.floatx()) for x in classSelectors]
+
+        #for each of the selections above, multiply their respective weight
+        weights = [sel * w for sel,w in zip(classSelectors, weightsList)]
+
+        #sums all the selections
+        #result is a tensor with the respective weight for each element in predictions
+        weightMultiplier = weights[0]
+        for i in range(1, len(weights)):
+            weightMultiplier = weightMultiplier + weights[i]
+
+
+        #make sure your originalLossFunc only collapses the class axis
+        #you need the other axes intact to multiply the weights tensor
+        loss = originalLossFunc(true,pred)
+        loss = loss * weightMultiplier
+
+        return loss
+    return lossFunc
+
+from sklearn.utils import class_weight
+unique_y = np.unique(Y_train)
+
+#class_weights = class_weight.compute_class_weight(dict(class_weight = "balanced", classes = unique_y ,y = Y_train))
+
+class_weights = class_weight.compute_class_weight(dict("balanced", unique_y ,Y_train))
+
+class_weights = class_weight.compute_sample_weight(dict(enumerate("balanced", Y_train)))
+
+def calculating_class_weights(y_true):
+    from sklearn.utils.class_weight import compute_class_weight
+    number_dim = np.shape(y_true)[1]
+    weights = np.empty([number_dim, 2])
+    for i in range(number_dim):
+        weights[i] = class_weight.compute_sample_weight(class_weight = 'balanced', y = y_true[:, i])
+    return weights
+#[0.,1.]
+def get_weighted_loss(weights):
+    def weighted_loss(y_true, y_pred):
+        return K.mean((weights[:,0]**(1-y_true))*(weights[:,1]**(y_true))*K.binary_crossentropy(y_true, y_pred), axis=-1)
+    return weighted_loss
+
+class_weight = calculating_class_weights(Y_train)
+#loss_weight_func = get_weighted_loss(class_weight)
+
+import numpy as np
+import math
+
+# labels_dict : {ind_label: count_label}
+# mu : parameter to tune
+
+def create_class_weight(labels_dict,mu=0.15):
+    total = np.sum(list(labels_dict.values()))
+    keys = labels_dict.keys()
+    class_weight = dict()
+
+    for key in keys:
+        score = math.log(mu*total/float(labels_dict[key]))
+        class_weight[key] = score if score > 1.0 else 1.0
+
+    return class_weight
+
+# random labels_dict
+labels_dict = {0: 5, 1: 2, 2: 2, 3: 1}
+
+class_weights = create_class_weight(labels_dict)
+
+def generate_sample_weights(training_data, class_weights):
+    #replaces values for up to 3 classes with the values from class_weights#
+    sample_weights = [np.where(y==0,class_weights[0],
+                        np.where(y==1,class_weights[1],
+                        np.where(y==2,class_weights[2],
+                        np.where(y==3,class_weights[3],
+                        np.where(y==4,class_weights[4],y))))) for y in training_data]
+    return np.asarray(sample_weights)
+
+class_weights = {0: 4.5, 1: 0.94, 2: 0.94, 3: 0.5, 4: 0.5}
+
+import numpy as np
+from sklearn.utils.class_weight import compute_class_weight
+
+def calculate_class_weights(Y_data):
+    # Convert one-hot encoded labels to integer labels
+    integer_labels = np.argmax(Y_data, axis=-1)
+
+    # Flatten the labels into a 1D array
+    flat_labels = integer_labels.flatten()
+
+    # Calculate the unique class labels and their counts
+    unique_classes, counts = np.unique(flat_labels, return_counts=True)
+
+    # Calculate class weights using sklearn's compute_class_weight function
+    class_weights = compute_class_weight('balanced', classes=unique_classes, y=flat_labels)
+
+    # Create a dictionary mapping class labels to their corresponding weights
+    class_weight_dict = {cls: weight for cls, weight in zip(unique_classes, class_weights)}
+
+    return class_weight_dict
+
+# Usage example:
+#Y_train = np.array([[[0, 1, 0, 0, 0], [0, 0, 1, 0, 0]], [[1, 0, 0, 0, 0], [0, 0, 0, 1, 0]]])
+class_weights = calculate_class_weights(Y_train)
+print(class_weights)
+
+weighted_loss = generate_sample_weights(Y_train, class_weights)
+
+import torch
+
+# sample_weight = np.ones(shape=(len(Y_train),))
+# print(sample_weight)
+# sample_weight[Y_train == 1] = 1.5
+
+
+# =======================================================
+# add callbacks, compile model and fit training data
+
+# save best model with maximum validation accuracy
+checkpoint = ModelCheckpoint(model_save_path, monitor="val_accuracy", verbose=1, save_best_only=True,
+                             mode="max")
+
+#lilaloss = .nn.CrossEntropyLoss(weight='balanced', size_average=None, ignore_index=- 100, reduce=None, reduction='none')
+
+# stop model training early if validation loss doesn't continue to decrease over 2 iterations
+early_stopping = EarlyStopping(monitor='categorical_crossentropy', patience=2, verbose=1, mode="min")
+
+
+
+# log training console output to csv
+csv_logger = CSVLogger(csv_logger, separator=",", append=False)
+
+# create list of callbacks
+callbacks_list = [checkpoint, csv_logger]  # early_stopping
+
+# compile model
+model.compile(optimizer="adam", loss = 'categorical_crossentropy', metrics=[dice_coef, "accuracy", iou_coefficient, jaccard_index])
+#model.compile(optimizer="adam", loss = sample_weight, metrics=[dice_coef, "accuracy", iou_coefficient, jaccard_index])
+
+
+#model.compile(optimizer="adam", loss= weightedLoss(keras.losses.categorical_crossentropy, class_weights),  metrics=[dice_coef, "accuracy", iou_coefficient, jaccard_index])
+
+# train and save model
+model.fit(X_train, Y_train, epochs=1, batch_size=3, validation_data=(X_test, Y_test), callbacks=callbacks_list,
+          verbose=1)
+model.save(os.path.join(model_save_path, 'model_drone'))
+print("model saved:", model_save_path)
+
+import tensorflow as tf
+from tensorflow.keras.losses import CategoricalCrossentropy
+
+def weighted_categorical_crossentropy(class_weights):
+    def loss(y_true, y_pred):
+        cce = CategoricalCrossentropy()
+        loss = cce(y_true, y_pred)
+        weight_vector = tf.constant([class_weights[i] for i in range(len(class_weights))], dtype=tf.float32)
+        y_true_one_hot = tf.cast(y_true, tf.float32)
+        weights = tf.reduce_sum(weight_vector * y_true_one_hot, axis=-1)
+        weighted_loss = loss * weights
+        return tf.reduce_mean(weighted_loss)
+    return loss
+class_weights = class_weights
+weighted_loss = weighted_categorical_crossentropy(class_weights)
+
+# mask color codes UAV
+class MaskColorMap(Enum):
+    Water = (51, 51, 51)
+    Roads = (17, 17, 17)
+    Bushes = (34, 34, 34)
+    Ground = (68,68,68)
+    background = (0, 0, 0)
+
+# save best model with maximum validation accuracy
+checkpoint = ModelCheckpoint(model_checkpoint_filepath, monitor="val_accuracy", verbose=1, save_best_only=True,
+                             mode="max")
+
+# stop model training early if validation loss doesn't continue to decrease over 2 iterations
+early_stopping = EarlyStopping(monitor="categorical_crossentropy", patience=2, verbose=1, mode="min")
+
+# log training console output to csv
+csv_logger = CSVLogger(csv_logger, separator=",", append=False)
+
+# create list of callbacks
+callbacks_list = [checkpoint, csv_logger]  # early_stopping
+#"categorical_crossentropy"
+# compile model
+model.compile(optimizer="adam", loss=weighted_loss,
+              metrics=["accuracy", iou_coefficient, jaccard_index])
+
+# train and save model
+model.fit(X_train, Y_train, epochs=4, batch_size=30, validation_data=(X_test, Y_test), callbacks=callbacks_list,
+          verbose=1)
+model.save(model_save_path)
+print("model saved:", model_save_path)
+
+train_accuracies = [0.2759, 0.3379, 0.3397, 0.3366]
+val_accuracies = [0.3220, 0.3218, 0.3283, 0.3291]
+epochs = [0, 5, 15, 20]
+
+plt.plot(epochs, train_accuracies, 'r', label='Training accuracy')
+plt.plot(epochs, val_accuracies, 'b', label='Validation accuracy')
+plt.title('Training and Validation Accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.show()
+
+# list all data in history
+print(model.history.keys())
+# summarize history for accuracy
+plt.plot(model.history['accuracy'])
+plt.plot(history.history['val_accuracy'])
+plt.title('model accuracy')
+plt.ylabel('accuracy')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
+# summarize history for loss
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('model loss')
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
+
+"""##Lazypredict"""
+
+! pip install lazypredict
+
+import lazypredict
+from lazypredict.Supervised import LazyClassifier
+
+X_ltrain = X_train.reshape(-1, 512*512*3)
+X_ltest = X_test.reshape(-1, 512*512*3)
+Y_ltrain = Y_train.reshape(-1, 512*512*3)
+Y_ltest = Y_test.reshape(-1, 512*512*3)
+
+clf = LazyClassifier(verbose=0,ignore_warnings=True, custom_metric=None)
+models,predictions = clf.fit(X_train, X_test, Y_train, Y_test)
+models
+
+"""##New pre trained"""
+
+import os
+import glob
+import cv2
+import numpy as np
+from matplotlib import pyplot as plt
+import pandas as pd
+
+from keras.models import Model
+from keras.applications.vgg16 import VGG16
+patch_size = 512
+#Load VGG16 model wothout classifier/fully connected layers
+#Load imagenet weights that we are going to use as feature generators
+VGG_model = VGG16(weights='imagenet', include_top=False, input_shape=(patch_size, patch_size, 3))
+
+#Make loaded layers as non-trainable. This is important as we want to work with pre-trained weights
+for layer in VGG_model.layers:
+	layer.trainable = False
+
+VGG_model.summary()  #Trainable parameters will be 0
+
+# =======================================================
+# add callbacks, compile model and fit training data
+
+# save best model with maximum validation accuracy
+checkpoint = ModelCheckpoint(model_save_path, monitor="val_accuracy", verbose=1, save_best_only=True,
+                             mode="max")
+
+# stop model training early if validation loss doesn't continue to decrease over 2 iterations
+early_stopping = EarlyStopping(monitor="val_loss", patience=2, verbose=1, mode="min")
+
+# log training console output to csv
+csv_logger = CSVLogger(csv_logger, separator=",", append=False)
+
+# create list of callbacks
+callbacks_list = [checkpoint, csv_logger]  # early_stopping
+
+# compile model
+model.compile(optimizer="adam", loss ="binary_crossentropy",
+              metrics=[dice_coef, "accuracy", iou_coefficient, jaccard_index])
+
+# train and save model
+model.fit(X_train, Y_train, epochs=4, batch_size=10, validation_data=(X_test, Y_test), callbacks=callbacks_list,
+          verbose=1)
+model.save(os.path.join(model_save_path, 'model_drone'))
+print("model saved:", model_save_path)
+
+# =====================================================
+# Predict
+
+def rgb_encode_mask(mask):
+    # initialize rgb image with equal spatial resolution
+    rgb_encode_image = np.zeros((mask.shape[0], mask.shape[1], 3))
+
+    # iterate over MaskColorMap
+    for j, cls in enumerate(MaskColorMap):
+        # convert single integer channel to RGB channels
+        rgb_encode_image[(mask == j)] = np.array(cls.value) / 255.
+    return rgb_encode_image
+
+
+def predict(X_data, Y_data):
+  prediction_list = []
+  ground_truth = []
+  for i in tqdm(range(len(X_data))):
+      # choose random number from 0 to test set size
+      test_img_number = i
+
+      # extract test input image
+      test_img = X_data[test_img_number]
+
+      # ground truth test label converted from one-hot to integer encoding
+      ground_truth = np.argmax(Y_data[test_img_number], axis=-1)
+
+      # expand first dimension as U-Net requires (m, h, w, nc) input shape
+      test_img_input = np.expand_dims(test_img, 0)
+      #print(test_img_input.shape)
+      # make prediction with model and remove extra dimension
+      prediction = np.squeeze(VGG_model.predict(test_img_input))
+      #print(prediction.shape)
+      # convert softmax probabilities to integer values
+      predicted_img = np.argmax(prediction, axis=-1)
+      #print(predicted_img.shape)
+      # convert integer encoding to rgb values
+      rgb_image = rgb_encode_mask(predicted_img)
+      rgb_ground_truth = rgb_encode_mask(ground_truth)
+
+      prediction_list.append(predicted_img)
+      ground_truth.append(rgb_ground_truth)
+
+  return prediction_list, ground_truth
+
+prediction_list, ground_list = predict(X_test, Y_test)
+
+for i in prediction_list:
+  plt.imshow(i)
+
+"""https://github.com/bnsreenu/python_for_image_processing_APEER/blob/master/tutorial125_semantic_segmentation_using_Xfer_learning_VGG_XGBoost.ipynb
+
+##Pre-loaded models
+"""
+
+!pip install -U -q segmentation-models
+!pip install -q tensorflow==2.2.1
+!pip install -q keras==2.5
+import os
+os.environ["SM_FRAMEWORK"] = "tf.keras"
+
+from tensorflow import keras
+import segmentation_models as sm
+
+BACKBONE = 'resnet34'
+preprocess_input = sm.get_preprocessing(BACKBONE)
+
+# define model
+model = sm.Unet(BACKBONE, encoder_weights='imagenet')
+model.compile(
+    'Adam',
+    loss=sm.losses.bce_jaccard_loss,
+    metrics=[sm.metrics.iou_score])
+
+Y_train = np.asarray(Y_train).astype('float32').reshape((-1,1))
+Y_test = np.asarray(Y_test).astype('float32').reshape((-1,1))
+
+model.fit(X_train, Y_train, epochs=4, batch_size=10, validation_data=(X_test, Y_test), callbacks=callbacks_list,
+          verbose=1)
+
+"""##Continuation"""
+
+# =====================================================
+# mask color codes
+class MaskColorMap(Enum):
+    Unlabelled = (155, 155, 155)
+    Building = (60, 16, 152)
+    Land = (132, 41, 246)
+    Road = (110, 193, 228)
+    Vegetation = (254, 221, 58)
+    Water = (226, 169, 41)
+
+# load pre-trained model
+
+#model_name =os.path.join(model_save_path, "final_aerial_segmentation_2022-11-09 22_37_27_640199.hdf5")
+
+#model = load_model(model_name, custom_objects={'iou_coefficient': iou_coefficient, 'jaccard_index': jaccard_index})
+
+# mask color codes UAV
+class MaskColorMap(Enum):
+    Water = (0, 0, 255)
+    Roads = (100, 100, 100)
+    Bushes = (0, 255, 0)
+    Ground = (51, 51, 51)
+    background = (255, 0, 0)
+
+target_names = []
+for key in MaskColorMap.keys:
+    target_names.append(key)
+
+print(target_names)
+
+import numpy as np
+from sklearn.metrics import confusion_matrix, cohen_kappa_score
+from tqdm import tqdm
+import itertools
+import matplotlib.pyplot as plt
+import pandas as pd
+
+
+def rgb_encode_mask(mask):
+    # initialize rgb image with equal spatial resolution
+    rgb_encode_image = np.zeros((mask.shape[0], mask.shape[1], 3))
+
+    # iterate over MaskColorMap
+    for j, cls in enumerate(MaskColorMap):
+        # convert single integer channel to RGB channels
+        rgb_encode_image[(mask == j)] = np.array(cls.value) / 255.
+    return rgb_encode_image
+
+
+def rgb_encode_pres(mask):
+    # initialize rgb image with equal spatial resolution
+    rgb_encode_image = np.zeros((mask.shape[0], mask.shape[1], 3))
+
+    # iterate over MaskColorMap
+    for j, cls in enumerate(MaskColorMap):
+        # convert single integer channel to RGB channels
+        rgb_encode_image[(mask == j)] = np.array(cls.value) / 255.
+    return rgb_encode_image
+
+def display_images(images, rows=1, titles=None, save=None):
+    assert ((titles is None) or (len(images) == len(titles)))
+    n_images = len(images)
+    fig, axes = plt.subplots(rows, n_images // rows)
+    if titles is not None:
+        for title, ax in zip(titles, axes):
+            ax.set_title(title)
+    for i, ax in enumerate(axes):
+        ax.axis('off')
+        ax.imshow(images[i], cmap='gray')
+    if save:
+        plt.savefig(save, dpi=300)
+        plt.show(fig)
+    else:
+        plt.show()
+
+
+
+def plot_confusion_matrix(cm, classes,
+                          title='Confusion Matrix',
+                          cmap=plt.cm.Blues):
+
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45, ha="right", fontsize=8)
+    plt.yticks(tick_marks, classes, fontsize=8)
+
+    fmt = 'd'
+    thresh = cm.max() / 2.
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        plt.text(j, i, format(cm[i, j], fmt),
+                 horizontalalignment="center",
+                 fontsize=6,
+                 color="white" if cm[i, j] > thresh else "black")
+
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+
+def predict(X_data, Y_data, save_images=False, output_folder="output"):
+    prediction_list = []
+    cm_sum = np.zeros((5, 5), dtype=int)
+    kappa_scores = []
+
+    if save_images and not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
+    for i in tqdm(range(len(X_data))):
+        test_img_number = i
+        test_img = X_data[test_img_number]
+        ground_truth = np.argmax(Y_data[test_img_number], axis=-1)
+        test_img_input = np.expand_dims(test_img, 0)
+        prediction = np.squeeze(model.predict(test_img_input))
+        predicted_img = np.argmax(prediction, axis=-1)
+        rgb_image = rgb_encode_mask(predicted_img)
+        rgb_ground_truth = rgb_encode_mask(ground_truth)
+
+        if save_images:
+            filename = os.path.join(output_folder, f"output_{i}.png")
+            display_images( [test_img, rgb_ground_truth, rgb_image], rows=1, titles=['Aerial', 'Ground Truth', 'Prediction'],save=f"prediction_{i}.png")
+        else:
+            display_images(
+                [test_img, rgb_ground_truth, rgb_image],
+                rows=1, titles=['Aerial', 'Ground Truth', 'Prediction']
+            )
+
+        prediction_list.append(predicted_img)
+        cm = confusion_matrix(ground_truth.flatten(), predicted_img.flatten(), labels=[0, 1, 2, 3, 4])
+        cm_sum += cm
+        kappa = cohen_kappa_score(ground_truth.flatten(), predicted_img.flatten())
+        kappa_scores.append(kappa)
+
+    plot_confusion_matrix(cm_sum, target_names)
+    plt.show()
+
+    plt.plot(kappa_scores)
+    plt.xlabel('Image Index')
+    plt.ylabel('Kappa Score')
+    plt.title('Kappa Statistics of all Images')
+    plt.show()
+
+
+    # Calculate and display per-class accuracy for all images combined
+    combined_accuracy = cm_sum.diagonal() / cm_sum.sum(axis=1)
+    combined_accuracy_df = pd.DataFrame([combined_accuracy], columns=target_names)
+    combined_accuracy_df.index.name = 'Combined Accuracy'
+    print("Per-class Accuracies for All Images Combined:")
+    print(combined_accuracy_df)
+
+    return prediction_list
+
+prediction_list = predict(X_train, Y_train, save_images=True, output_folder=img_folder)
+
+# Test the modified function with some sample data
+
+
+target_names = ["Water", "Roads", "Bushes", "Ground", "Background"]
+plot_confusion_matrix(cm, target_names)
+plt.show()
+
+
+
+from sklearn.metrics import multilabel_confusion_matrix
+def plot_confusion_matrix(cm, classes, normalize=True, title='Confusion matrix', cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """
+    plt.figure(figsize=(20,20))
+
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45)
+    plt.yticks(tick_marks, classes)
+
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        cm = np.around(cm, decimals=2)
+        cm[np.isnan(cm)] = 0.0
+        print("Normalized confusion matrix")
+    else:
+        print('Confusion matrix, without normalization')
+    thresh = cm.max() / 2.
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        plt.text(j, i, cm[i, j],
+                 horizontalalignment="center",
+                 color="white" if cm[i, j] > thresh else "black")
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+
+#Print the Target names
+from sklearn.metrics import classification_report, confusion_matrix
+import itertools
+#shuffle=False
+
+target_names  = ['Water', 'Roads', 'Bushes', 'Ground', 'background']
+
+# =====================================================
+# Predict
+
+def rgb_encode_mask(mask):
+    # initialize rgb image with equal spatial resolution
+    rgb_encode_image = np.zeros((mask.shape[0], mask.shape[1], 3))
+
+    # iterate over MaskColorMap
+    for j, cls in enumerate(MaskColorMap):
+        # convert single integer channel to RGB channels
+        rgb_encode_image[(mask == j)] = np.array(cls.value) / 255.
+    return rgb_encode_image
+
+
+def rgb_encode_pres(mask):
+    # initialize rgb image with equal spatial resolution
+    rgb_encode_image = np.zeros((mask.shape[0], mask.shape[1], 3))
+
+    # iterate over MaskColorMap
+    for j, cls in enumerate(MaskColorMap):
+        # convert single integer channel to RGB channels
+        rgb_encode_image[(mask == j)] = np.array(cls.value) / 255.
+    return rgb_encode_image
+
+
+def predict(X_data, Y_data):
+  prediction_list = []
+  for i in tqdm(range(len(X_data))):
+      # choose random number from 0 to test set size
+      test_img_number = i
+
+      # extract test input image
+      test_img = X_data[test_img_number]
+
+      # ground truth test label converted from one-hot to integer encoding
+      ground_truth = np.argmax(Y_data[test_img_number], axis=-1)
+      # expand first dimension as U-Net requires (m, h, w, nc) input shape
+      test_img_input = np.expand_dims(test_img, 0)
+      #print(test_img_input.shape)
+      # make prediction with model and remove extra dimension
+      prediction = np.squeeze(model.predict(test_img_input))
+
+      #print(prediction.shape)
+      print(np.unique(prediction, return_counts=True))
+      # convert softmax probabilities to integer values
+      predicted_img = np.argmax(prediction, axis=-1)
+      print(predicted_img)
+      #print(predicted_img.shape)
+      # convert integer encoding to rgb values
+      rgb_image = rgb_encode_mask(predicted_img)
+      rgb_ground_truth = rgb_encode_mask(ground_truth)
+
+      # visualize model predictions
+      display_images(
+          [test_img, rgb_ground_truth, rgb_image],
+          rows=1, titles=['Aerial', 'Ground Truth', 'Prediction']
+      )
+
+      prediction_list.append(predicted_img)
+
+      multilabel_confusion_matrix(ground_truth, predicted_img, labels=["Water", "Roads", "Bushes", "Ground", "Background"])
+
+      # print('Confusion Matrix')
+      # # cm = multilabel_confusion_matrix(ground_truth, predicted_img)
+      # # plot_confusion_matrix(cm, target_names, title='Confusion Matrix')
+
+      # y_test_arg=np.argmax(ground_truth,axis=1)
+      # #Y_pred = np.argmax(model.predict(X_test),axis=1)
+      # Y_pred = prediction
+      # print('Confusion Matrix')
+      # print(confusion_matrix(y_test_arg, Y_pred))
+
+  return prediction_list
+
+
+prediction_list = predict(X_train, Y_train)
+
+"""##confusion matrix"""
+
+
+
+import numpy as np
+from sklearn.metrics import confusion_matrix
+
+# Define the ground truth and predicted labels as 1D arrays
+ground_truth = np.array(Y_train)
+predicted = np.array(prediction_list)
+
+# Define the labels for the classes
+classes = ['Class 0', 'Class 1', 'Class 2', '3', '4']
+
+# Compute the confusion matrix
+cm = confusion_matrix(ground_truth, predicted)
+
+# Print the confusion matrix with labels
+print('Confusion matrix:')
+print(cm)
+print('')
+
+# Print the classification report with precision, recall, and F1-score
+from sklearn.metrics import classification_report
+print('Classification report:')
+print(classification_report(ground_truth, predicted, target_names=classes))
+
+def plot_confusion_matrix(cm, classes, normalize=True, title='Confusion matrix', cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """
+    plt.figure(figsize=(20,20))
+
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45)
+    plt.yticks(tick_marks, classes)
+
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        cm = np.around(cm, decimals=2)
+        cm[np.isnan(cm)] = 0.0
+        print("Normalized confusion matrix")
+    else:
+        print('Confusion matrix, without normalization')
+    thresh = cm.max() / 2.
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        plt.text(j, i, cm[i, j],
+                 horizontalalignment="center",
+                 color="white" if cm[i, j] > thresh else "black")
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+
+#Print the Target names
+from sklearn.metrics import classification_report, confusion_matrix
+import itertools
+#shuffle=False
+
+target_names = []
+for key in MaskColorMap:
+    target_names.append(key)
+
+# print(target_names)
+
+#Confution Matrix
+
+# expand first dimension as U-Net requires (m, h, w, nc) input shape
+test_img_input = np.expand_dims(test_img, 0)
+#print(test_img_input.shape)
+# make prediction with model and remove extra dimension
+Y_pred = np.squeeze(model.predict(test_img_input))
+
+y_pred = np.argmax(Y_pred, axis=0)
+Y_train_cm = np.argmax(Y_train[0],axis=0)
+print('Confusion Matrix')
+cm = confusion_matrix(Y_train_cm, y_pred)
+plot_confusion_matrix(cm, target_names, title='Confusion Matrix')
+
+#Print Classification Report
+print('Classification Report')
+print(classification_report(MaskColorMap, y_pred, target_names=target_names))
+
+print(np.squeeze(model.predict(test_img_input)))
+
+print(np.argmax(Y_pred, axis=1))
+
+print(Y_train[0])
+
+plt.plot(Y[0])
+
+total_prediction = predict(X, Y)
+
+
+
+"""##prediction full"""
+
+patch_size = 512
+instances = []
+image_mask = cv2.imread(os.path.join(base_folder, "masks/", 'F1.png'))
+image_mask = Image.fromarray(image_mask)
+image_mask = np.array(image_mask.crop((0, 0, 10000, 10000)))
+# unique_colors = np.unique(image_mask.reshape(-1, image_mask.shape[2]), axis=0)
+# print(unique_colors)
+# breakpoint()
+image = cv2.imread(os.path.join(base_folder, "images/", 'F1.png'))
+image = Image.fromarray(image)
+image = np.array(image.crop((0, 0, 10000, 10000)))
+np.array(image)
+size_x = (image.shape[1] // patch_size) * patch_size  # width to the nearest size divisible by patch size
+size_y = (image.shape[0] // patch_size) * patch_size  # height to the nearest size divisible by patch size
+image = Image.fromarray(image)
+image_mask = Image.fromarray(image_mask)
+image = np.array(image.crop((0, 0, size_x, size_y)))
+# Extract patches from each image, step=patch_size means no overlap
+patch_img = patchify(image, (patch_size, patch_size, 3), step=patch_size)
+print(patch_img.shape)
+large_img = unpatchify(patch_img, image.shape)
+print(large_img.shape)
+
+
+# iterate over vertical patch axis
+for j in range(patch_img.shape[0]):
+    # iterate over horizontal patch axis
+    for k in range(patch_img.shape[1]):
+        # patches are located like a grid. use (j, k) indices to extract single patched image
+        single_patch_img = patch_img[j, k]
+
+        # Drop extra dimension from patchify
+        instances.append(np.squeeze(single_patch_img))
+# Crop original image to size divisible by patch size from top left corner
+
+image.shape
+
+plt.imshow(image_mask)
+
+for i in range(len(total_prediction)):
+    test_img = total_prediction[i]
+    gt = ground_list[i]
+    display_images(
+        [X[i], gt], test_img],
+        rows=1, titles=['Aerial', 'Ground Truth', 'Prediction']
+    )
+
+arr_predict = np.array(total_prediction)
+print(arr_predict.shape)
+ins = np.array(instances)
+print(ins.shape)
+
+reshaped = np.reshape(arr_predict, patch_img.shape)
+
+"""#prediction of F10"""
+
+patch_size = 512
+instances = []
+image_mask = cv2.imread(os.path.join(base_folder, "F10_mask/", 'F10_GT.png'))
+#mage_mask = Image.fromarray(image_mask)
+#image_mask = np.array(image_mask.crop((0, 0, 10000, 10000)))
+# unique_colors = np.unique(image_mask.reshape(-1, image_mask.shape[2]), axis=0)
+# print(unique_colors)
+# breakpoint()
+image = cv2.imread(os.path.join(base_folder, "F10/", 'F10.png'))
+#image = Image.fromarray(image)
+#image = np.array(image.crop((0, 0, 10000, 10000)))
+np.array(image)
+size_x = (image.shape[1] // patch_size) * patch_size  # width to the nearest size divisible by patch size
+size_y = (image.shape[0] // patch_size) * patch_size  # height to the nearest size divisible by patch size
+image = Image.fromarray(image)
+image_mask = Image.fromarray(image_mask)
+image = np.array(image.crop((0, 0, size_x, size_y)))
+# Extract patches from each image, step=patch_size means no overlap
+patch_img = patchify(image, (patch_size, patch_size, 3), step=patch_size)
+print(patch_img.shape)
+large_img = unpatchify(patch_img, image.shape)
+print(large_img.shape)
+
+
+# iterate over vertical patch axis
+for j in range(patch_img.shape[0]):
+    # iterate over horizontal patch axis
+    for k in range(patch_img.shape[1]):
+        # patches are located like a grid. use (j, k) indices to extract single patched image
+        single_patch_img = patch_img[j, k]
+
+        # Drop extra dimension from patchify
+        instances.append(np.squeeze(single_patch_img))
+# Crop original image to size divisible by patch size from top left corner
+
+image.shape
+
+img_lis = []
+for i in range(len(X)):
+    # choose random number from 0 to test set size
+    test_img_number = i
+
+    # extract test input image
+    test_img = X[test_img_number]
+
+    # ground truth test label converted from one-hot to integer encoding
+    ground_truth = np.argmax(Y[test_img_number], axis=-1)
+
+    # expand first dimension as U-Net requires (m, h, w, nc) input shape
+    test_img_input = np.expand_dims(test_img, 0)
+
+    # make prediction with model and remove extra dimension
+    prediction = np.squeeze(model.predict(test_img_input))
+
+    # convert softmax probabilities to integer values
+    predicted_img = np.argmax(prediction, axis=-1)
+    #print(predicted_img)
+    # convert integer encoding to rgb values
+    rgb_image = rgb_encode_mask(predicted_img)
+    rgb_ground_truth = rgb_encode_mask(ground_truth)
+    #print(X_test.shape)
+    # visualize model predictions
+    display_images(
+        [test_img, rgb_ground_truth, rgb_image],
+        rows=1, titles=['Aerial', 'Ground Truth', 'Prediction']
+    )
+    img_lis.append(rgb_image)
+
+"""##Random prediction show X test"""
+
+img_lis = []
+for i in range(len(X_test)):
+    # choose random number from 0 to test set size
+    test_img_number = np.random.randint(0, len(X_test))
+
+    # extract test input image
+    test_img = X_test[test_img_number]
+
+    # ground truth test label converted from one-hot to integer encoding
+    ground_truth = np.argmax(Y_test[test_img_number], axis=-1)
+
+    # expand first dimension as U-Net requires (m, h, w, nc) input shape
+    test_img_input = np.expand_dims(test_img, 0)
+
+    # make prediction with model and remove extra dimension
+    prediction = np.squeeze(model.predict(test_img_input))
+
+    # convert softmax probabilities to integer values
+    predicted_img = np.argmax(prediction, axis=-1)
+
+    # convert integer encoding to rgb values
+    rgb_image = rgb_encode_mask(predicted_img)
+    rgb_ground_truth = rgb_encode_mask(ground_truth)
+    #print(X_test.shape)
+    # visualize model predictions
+    display_images(
+        [test_img, rgb_ground_truth, rgb_image],
+        rows=1, titles=['Aerial', 'Ground Truth', 'Prediction']
+    )
+    img_lis.append(rgb_image)
+
+"""## Predcition for whole list"""
+
+from torch import tensor
+from torchmetrics.classification import MulticlassConfusionMatrix
+import sklearn
+
+img_lis = []
+for i in range(len(X)):
+    # choose random number from 0 to test set size
+    test_img_number = i
+
+    # extract test input image
+    test_img = X[test_img_number]
+
+    # ground truth test label converted from one-hot to integer encoding
+    ground_truth = np.argmax(Y[test_img_number], axis=-1)
+
+    # expand first dimension as U-Net requires (m, h, w, nc) input shape
+    test_img_input = np.expand_dims(test_img, 0)
+
+    # make prediction with model and remove extra dimension
+    prediction = np.squeeze(model.predict(test_img_input))
+
+    # convert softmax probabilities to integer values
+    predicted_img = np.argmax(prediction, axis=-1)
+    #print(predicted_img)
+    # convert integer encoding to rgb values
+    rgb_image = rgb_encode_mask(predicted_img)
+    rgb_ground_truth = rgb_encode_mask(ground_truth)
+    #print(X_test.shape)
+    # visualize model predictions
+    display_images(
+        [test_img, rgb_ground_truth, rgb_image],
+        rows=1, titles=['Aerial', 'Ground Truth', 'Prediction']
+    )
+    img_lis.append(rgb_image)
+
+
+    target = tensor(ground_truth)
+    preds = tensor(predicted_img)
+    metric = MulticlassConfusionMatrix(num_classes=5)
+    metric(preds, target)
+
+    #sklearn.metrics.cohen_kappa_score(ground_truth, predicted_img)
+
+"""##Predict zonder GT"""
+
+#load in the data that needs to be predicted
+image = cv2.imread(os.path.join(base_folder, "zonder_gt_pred/", 'F2.tiff'))
+image = Image.fromarray(image)
+image = np.array(image.crop((0, 0, 10000, 10000)))
+np.array(image)
+size_x = (image.shape[1] // patch_size) * patch_size  # width to the nearest size divisible by patch size
+size_y = (image.shape[0] // patch_size) * patch_size  # height to the nearest size divisible by patch size
+image = Image.fromarray(image)
+image_mask = Image.fromarray(image_mask)
+image = np.array(image.crop((0, 0, size_x, size_y)))
+# Extract patches from each image, step=patch_size means no overlap
+patch_img = patchify(image, (patch_size, patch_size, 3), step=patch_size)
+print(patch_img.shape)
+
+predict_img_lis = []
+for i in range(len(X)):
+    # choose random number from 0 to test set size
+    test_img_number = i
+
+    # extract test input image
+    test_img = X[test_img_number]
+
+    # expand first dimension as U-Net requires (m, h, w, nc) input shape
+    test_img_input = np.expand_dims(test_img, 0)
+
+    # make prediction with model and remove extra dimension
+    prediction = np.squeeze(model.predict(test_img_input))
+
+    # convert softmax probabilities to integer values
+    predicted_img = np.argmax(prediction, axis=-1)
+
+    # convert integer encoding to rgb values
+    rgb_image = rgb_encode_mask(predicted_img)
+    rgb_ground_truth = rgb_encode_mask(ground_truth)
+    #print(X_test.shape)
+    # visualize model predictions
+    display_images(
+        [test_img,  rgb_image],
+        rows=1, titles=['Aerial', 'Prediction']
+    )
+    img_lis.append(rgb_image)
+
+"""##Unpatchify"""
+
+arr_pre_lis = np.array(img_lis)
+print(arr_pre_lis.shape)
+ins = np.array(instances)
+#print(ins.shape)
+
+reshaped = np.reshape(arr_pre_lis, patch_img.shape)
+reshaped.shape
+
+og_img = unpatchify(reshaped, image.shape)
+
+plt.imshow(image)
+
+plt.imshow(image_mask)
+
+plt.imshow(og_img)
+
+#g_img= Image.fromarray(og_img)
+og_img.save(os.path.join(base_folder, 'pred.png'), quality=95)
+
+plt.savefig(os.path.join(base_folder, 'pred.png'), bbox_inches='tight', format='eps')
+
+"""Te doen:
+predictions aan elkaar voegen tot 1 kaart en dat opslaan,
+kleurtje geven aan classes
+showplot functie aan data splitter toevoegen
+"""
+
+# Unpatchify images to get original image back
+#assert arr_predict.shape == (225, 512, 512, 3)
+# extract X_train shape parameters
+#m, img_height, img_width, img_channels
+
+og_img = unpatchify(reshaped, image.shape)
+
+
+plt.subplot(3, 3)
+plt.title('Final Output')
+plt.axis("off")
+plt.imshow(image)
+plt.imshow(rgb_ground_truth)
+plt.imshow(og_image)
+
+og_img.shape
+fig, ax1 = plt.subplots(1,3)
+plt.title('Final Output')
+plt.axis("off")
+plt.imshow(image)
+plt.imshow(rgb_ground_truth)
+plt.show
+plt.imshow(og_img)
+#plt.show
+
+!pip install -U --pre segmentation-models --user
+
+import segmentation_models as sm
+
+#Create the 2nd model
+base_model = keras.applications.ResNet50V2(
+                        include_top=False, # Exclude ImageNet classifier at the top
+                        weights='imagenet',
+                        input_shape=(patch_img.shape[0], patch_img.shape[1], patch_img.shape[2])
+                        )
+
+
+
+# Freeze the base_model
+base_model.trainable = False
+
+
+
+# Create new model on top
+inputs = keras.Input(shape=(patch_img.shape[0], patch_img.shape[1], patch_img.shape[2]))
+
+
+x = keras.applications.resnet_v2.preprocess_input(x)
+
+# Rebuild top layers
+x = layers.GlobalAveragePooling2D()(x)
+x = layers.BatchNormalization()(x)
+x = layers.Dropout(0.2)(x)  # Regularize with dropout
+
+outputs = layers.Dense(num_classes, activation="softmax", name="pred")(x)
+
+model = keras.Model(inputs, outputs)
+
+
+model.summary()
+
+model.compile((optimizer="adam", loss="categorical_crossentropy",
+              metrics=["accuracy", iou_coefficient, jaccard_index])
+
+earlystopping = callbacks.EarlyStopping(monitor='val_loss',
+                                        mode='min',
+                                        patience=5,
+                                        restore_best_weights=True)
+
+"""https://github.com/kennethleungty/TensorFlow-Transfer-Learning-Image-Classification/blob/main/notebooks/TensorFlow%20Tutorial%20-%20Image%20Classification%20on%20Oxford-IIIT%20Pets%20Dataset.ipynb
+
+##re-trained model
+"""
+
+# Importing the necessary library to mount Google Drive
+from google.colab import drive
+
+# Mounting Google Drive to access files from it
+drive.mount('/content/drive')
+
+# Listing the files in the 'Master_Thesis' folder
+!ls "/content/drive/MyDrive/Master_Thesis/"
+
+!pip install patchify
+
+import datetime
+import math
+import os
+from enum import Enum
+
+import cv2
+import matplotlib.pyplot as plt
+import numpy as np
+from PIL import Image
+from keras import backend as K
+from keras.callbacks import ModelCheckpoint, CSVLogger, EarlyStopping
+from keras.models import Model, load_model
+from keras.utils import to_categorical
+from patchify import patchify
+from sklearn.model_selection import train_test_split
+from keras.layers import Input, Conv2D, MaxPooling2D, concatenate, Conv2DTranspose, Dropout
+from keras.layers import Rescaling
+from tqdm import tqdm
+
+pnoa  = "PNOA"
+base_folder = "/content/drive/MyDrive/Master_Thesis/root_dir/"
+img_folder = os.path.join(base_folder,pnoa, "drone/")
+gt_folder = os.path.join(base_folder,pnoa, "mask")
+model_save_path = "/content/drive/MyDrive/Master_Thesis/Modelmap/"
+
+# =======================================================
+# image preprocessing
+
+def load_images_and_patchify(directory_path, patch_size):
+    """
+    :param patch_size: image patchify square size
+    :param directory_path: path to root directory containing training and test images
+    :return: list of images from directory
+    """
+
+    # initialize empty list for images
+    instances = []
+
+    # iterate through files in directory
+    for file_number, filepath in tqdm(enumerate(os.listdir(directory_path))):
+        extension = filepath.split(".")[-1]
+        if extension == "jpg" or extension == "png":
+
+            # current image path
+            img_path = rf"{directory_path}/{filepath}"
+
+            # Reads image as BGR
+            image = cv2.imread(img_path)
+
+            # convert image to RBG
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+            size_x = (image.shape[1] // patch_size) * patch_size  # width to the nearest size divisible by patch size
+            size_y = (image.shape[0] // patch_size) * patch_size  # height to the nearest size divisible by patch size
+
+            image = Image.fromarray(image)
+
+            # Crop original image to size divisible by patch size from top left corner
+            image = np.array(image.crop((0, 0, size_x, size_y)))
+
+            # Extract patches from each image, step=patch_size means no overlap
+            patch_img = patchify(image, (patch_size, patch_size, 3), step=patch_size)
+
+            # iterate over vertical patch axis
+            for j in range(patch_img.shape[0]):
+                # iterate over horizontal patch axis
+                for k in range(patch_img.shape[1]):
+                    # patches are located like a grid. use (j, k) indices to extract single patched image
+                    single_patch_img = patch_img[j, k]
+
+                    # Drop extra dimension from patchify
+                    instances.append(np.squeeze(single_patch_img))
+
+    return instances
+
+
+def reshape_images(instances):
+    """
+    :param instances: list of images
+    :return: reshaped images
+    """
+    for j in range(len(instances)):
+        instances[j] = instances[j].reshape(-1, 1)
+    return instances
+
+
+def get_minimum_image_size(instances):
+    """
+    :param instances: list of images
+    :return: min and max dimensions out of all images
+    """
+
+    # initialize minimum values to infinity
+    min_x = math.inf
+    min_y = math.inf
+
+    # loop through each instance
+    for image in instances:
+        # check min x (rows)
+        min_x = image.shape[0] if image.shape[0] < min_x else min_x
+
+        # check min y (columns)
+        min_y = image.shape[1] if image.shape[1] < min_y else min_y
+
+    return min_x, min_y
+
+
+def display_images(instances, rows=2, titles=None):
+    """
+    :param instances:  list of images
+    :param rows: number of rows in subplot
+    :param titles: subplot titles
+    :return:
+    """
+    n = len(instances)
+    cols = n // rows if (n / rows) % rows == 0 else (n // rows) + 1
+
+    # iterate through images and display subplots
+    for j, image in enumerate(instances):
+        plt.subplot(rows, cols, j + 1)
+        plt.title('') if titles is None else plt.title(titles[j])
+        plt.axis("off")
+        plt.imshow(image)
+
+    # show the figure
+    plt.show()
+
+
+# =====================================================
+# prepare training data input images
+
+def get_training_data(root_directory):
+    # initialise lists
+    image_dataset, mask_dataset = [], []
+
+    # define image patch size
+    patch_size = 160
+
+    # walk through root directory
+    for path, directories, files in os.walk(root_directory):
+        for subdirectory in directories:
+
+            # extract training input images and patchify
+            if subdirectory == "images":
+                image_dataset.extend(
+                    load_images_and_patchify(os.path.join(path, subdirectory), patch_size=patch_size))
+
+            # extract training label masks and patchify
+            elif subdirectory == "masks":
+                mask_dataset.extend(
+                    load_images_and_patchify(os.path.join(path, subdirectory), patch_size=patch_size))
+
+    # return input images and masks
+    return np.array(image_dataset), np.array(mask_dataset)
+
+
+def create_binary_segmentation_problem(image_dataset, mask_dataset):
+    # change problem to binary segmentation problem
+    x_reduced, y_reduced = [], []
+
+    # iterate over masks
+    for j, mask in tqdm(enumerate(mask_dataset)):
+
+        # get image shape
+        _img_height, _img_width, _img_channels = mask.shape
+
+        # create binary image (zeros)
+        binary_image = np.zeros((_img_height, _img_width, 1)).astype(int)
+
+        # iterate over each pixel in mask
+        for row in range(_img_height):
+            for col in range(_img_width):
+                # get image channel across axis=3
+                rgb = mask[row, col, :]
+
+                # building hex: #3C1098 = RGB(60, 16, 152) or BGR(152, 16, 60)
+                binary_image[row, col] = 1 if rgb[0] == 60 and rgb[1] == 16 and rgb[2] == 152 else 0
+
+        # only keep images with a high percentage of building coverage
+        if np.count_nonzero(binary_image == 1) > 0.15 * binary_image.size:
+            x_reduced.append(image_dataset[j])
+            y_reduced.append(binary_image)
+
+    # return binary image dataset
+    return np.array(x_reduced), np.array(y_reduced)
+
+
+# mask color codes
+class MaskColorMap(Enum):
+    Unlabelled = (155, 155, 155)
+    Building = (60, 16, 152)
+    Land = (132, 41, 246)
+    Road = (110, 193, 228)
+    Vegetation = (254, 221, 58)
+    Water = (226, 169, 41)
+
+
+def one_hot_encode_masks(masks, num_classes):
+    """
+    :param masks: Y_train patched mask dataset
+    :param num_classes: number of classes
+    :return:
+    """
+    # initialise list for integer encoded masks
+    integer_encoded_labels = []
+
+    # iterate over each mask
+    for mask in tqdm(masks):
+
+        # get image shape
+        _img_height, _img_width, _img_channels = mask.shape
+
+        # create new mask of zeros
+        encoded_image = np.zeros((_img_height, _img_width, 1)).astype(int)
+
+        for j, cls in enumerate(MaskColorMap):
+            encoded_image[np.all(mask == cls.value, axis=-1)] = j
+
+        # append encoded image
+        integer_encoded_labels.append(encoded_image)
+
+    # return one-hot encoded labels
+    return to_categorical(y=integer_encoded_labels, num_classes=num_classes)
+
+
+# =====================================================
+# output directories
+
+# datetime for filename saving
+dt_now = str(datetime.datetime.now()).replace(".", "_").replace(":", "_")
+model_img_save_path = f"{os.getcwd()}/models/final_aerial_segmentation_{dt_now}.png"
+#model_save_path = f"{os.getcwd()}/models/final_aerial_segmentation_{dt_now}.hdf5"
+model_checkpoint_filepath = os.getcwd() + "/models/weights-improvement-{epoch:02d}-{val_accuracy:.2f}.hdf5"
+csv_logger = os.path.join(base_folder, "csv_logger")
+
+
+# =======================================================
+# training metrics
+
+# Mean Intersection-Over-Union: iou = true_positives / (true_positives + false_positives + false_negatives)
+def iou_coefficient(y_true, y_pred, smooth=1):
+    intersection = K.sum(K.abs(y_true * y_pred), axis=[1, 2, 3])
+    union = K.sum(y_true, [1, 2, 3]) + K.sum(y_pred, [1, 2, 3]) - intersection
+    iou = K.mean((intersection + smooth) / (union + smooth), axis=0)
+    return iou
+
+
+# jaccard similarity: the size of the intersection divided by the size of the union of two sets
+def jaccard_index(y_true, y_pred):
+    y_true_f = K.flatten(y_true)
+    y_pred_f = K.flatten(y_pred)
+    intersection = K.sum(y_true_f * y_pred_f)
+    return (intersection + 1.0) / (K.sum(y_true_f) + K.sum(y_pred_f) - intersection + 1.0)
+
+
+# =====================================================
+# get training data
+
+# number of classes in segmentation dataset
+n_classes = 6
+
+# dataset directory
+data_dir = "/content/drive/MyDrive/Master_Thesis/root_dir/dubai"
+
+# create (X, Y) training data
+X, Y = get_training_data(root_directory=data_dir)
+
+# extract X_train shape parameters
+m, img_height, img_width, img_channels = X.shape
+print('number of patched image training data:', m)
+
+# display images from both training and test sets
+display_count = 6
+random_index = [np.random.randint(0, m) for _ in range(display_count)]
+sample_images = [x for z in zip(list(X[random_index]), list(Y[random_index])) for x in z]
+display_images(sample_images, rows=2)
+
+# convert RGB values to integer encoded labels for categorical_crossentropy
+Y = one_hot_encode_masks(Y, num_classes=n_classes)
+
+# split dataset into training and test groups
+X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.10, random_state=42)
+
+
+# =====================================================
+# define U-Net model architecture
+
+def build_unet(img_shape):
+    # input layer shape is equal to patch image size
+    inputs = Input(shape=img_shape)
+
+    # rescale images from (0, 255) to (0, 1)
+    rescale = Rescaling(scale=1. / 255, input_shape=(img_height, img_width, img_channels))(inputs)
+    previous_block_activation = rescale  # Set aside residual
+
+    contraction = {}
+    # # Contraction path: Blocks 1 through 5 are identical apart from the feature depth
+    for f in [16, 32, 64, 128]:
+        x = Conv2D(f, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(
+            previous_block_activation)
+        x = Dropout(0.1)(x)
+        x = Conv2D(f, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(x)
+        contraction[f'conv{f}'] = x
+        x = MaxPooling2D((2, 2))(x)
+        previous_block_activation = x
+
+    c5 = Conv2D(160, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(
+        previous_block_activation)
+    c5 = Dropout(0.2)(c5)
+    c5 = Conv2D(160, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c5)
+    previous_block_activation = c5
+
+    # Expansive path: Second half of the network: upsampling inputs
+    for f in reversed([16, 32, 64, 128]):
+        x = Conv2DTranspose(f, (2, 2), strides=(2, 2), padding='same')(previous_block_activation)
+        x = concatenate([x, contraction[f'conv{f}']])
+        x = Conv2D(f, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(x)
+        x = Dropout(0.2)(x)
+        x = Conv2D(f, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(x)
+        previous_block_activation = x
+
+    outputs = Conv2D(filters=n_classes, kernel_size=(1, 1), activation="softmax")(previous_block_activation)
+
+    return Model(inputs=inputs, outputs=outputs)
+
+
+# build model
+model = build_unet(img_shape=(img_height, img_width, img_channels))
+model.summary()
+
+# =======================================================
+# add callbacks, compile model and fit training data
+
+# save best model with maximum validation accuracy
+checkpoint = ModelCheckpoint(model_checkpoint_filepath, monitor="val_accuracy", verbose=1, save_best_only=True,
+                             mode="max")
+
+# stop model training early if validation loss doesn't continue to decrease over 2 iterations
+early_stopping = EarlyStopping(monitor="val_loss", patience=2, verbose=1, mode="min")
+
+# log training console output to csv
+csv_logger = CSVLogger(csv_logger, separator=",", append=False)
+
+# create list of callbacks
+callbacks_list = [checkpoint, csv_logger]  # early_stopping
+
+# compile model
+model.compile(optimizer="adam", loss="categorical_crossentropy",
+              metrics=["accuracy", iou_coefficient, jaccard_index])
+
+# train and save model
+model.fit(X_train, Y_train, epochs=20, batch_size=32, validation_data=(X_test, Y_test), callbacks=callbacks_list,
+          verbose=1)
+model.save(model_save_path)
+print("model saved:", model_save_path)
+
+# =====================================================
+# load pre-trained model
+
+model_dir = '/Users/andrewdavies/Code/tensorflow-projects/u-net-aerial-imagery-segmentation/models/'
+model_name = 'final_aerial_segmentation_2022-11-09 22_37_27_640199.hdf5'
+
+# model = load_model(
+#     model_dir + model_name,
+#     custom_objects={'iou_coefficient': iou_coefficient, 'jaccard_index': jaccard_index}
+# )
+
+
+# =====================================================
+# Predict
+
+def rgb_encode_mask(mask):
+    # initialize rgb image with equal spatial resolution
+    rgb_encode_image = np.zeros((mask.shape[0], mask.shape[1], 3))
+
+    # iterate over MaskColorMap
+    for j, cls in enumerate(MaskColorMap):
+        # convert single integer channel to RGB channels
+        rgb_encode_image[(mask == j)] = np.array(cls.value) / 255.
+    return rgb_encode_image
+
+
+for _ in range(20):
+    # choose random number from 0 to test set size
+    test_img_number = np.random.randint(0, len(X_test))
+
+    # extract test input image
+    test_img = X_test[test_img_number]
+
+    # ground truth test label converted from one-hot to integer encoding
+    ground_truth = np.argmax(Y_test[test_img_number], axis=-1)
+
+    # expand first dimension as U-Net requires (m, h, w, nc) input shape
+    test_img_input = np.expand_dims(test_img, 0)
+
+    # make prediction with model and remove extra dimension
+    prediction = np.squeeze(model.predict(test_img_input))
+
+    # convert softmax probabilities to integer values
+    predicted_img = np.argmax(prediction, axis=-1)
+
+    # convert integer encoding to rgb values
+    rgb_image = rgb_encode_mask(predicted_img)
+    rgb_ground_truth = rgb_encode_mask(ground_truth)
+
+    # visualize model predictions
+    display_images(
+        [test_img, rgb_ground_truth, rgb_image],
+        rows=1, titles=['Aerial', 'Ground Truth', 'Prediction']
+    )
+
+for i in range(len(X_test)):
+  to_save = display_images(
+    [test_img, rgb_ground_truth, rgb_image],
+    rows=1, titles=['Aerial', 'Ground Truth', 'Prediction'])
+  to_save.save(base_folder/pred.png)
+
+model_dir = model_save_path
+model_name = 'final_aerial_segmentation_2022-11-09 22_37_27_640199.hdf5'
+
+
+class CustomLayer(tf.keras.layers.Layer):
+    def __init__(self, k, name=None, **kwargs):
+        super(CustomLayer, self).__init__(name=name)
+        self.k = k
+        super(CustomLayer, self).__init__(**kwargs)
+
+
+    def get_config(self):
+        config = super(CustomLayer, self).get_config()
+        config.update({"k": self.k})
+        return config
+
+    def call(self, input):
+        return tf.multiply(input, 2)
+
+
+
+new_model.compile(optimizer=model.optimizer, loss='categorical_crossentropy', metrics=model.metrics=["accuracy", iou_coefficient, jaccard_index])
+
+
+
+new_input_shape = (512, 512, 3)
+
+model = tf.keras.models.Sequential([
+    tf.keras.layers.InputLayer(input_shape=new_input_shape, name='new_input_layer'),
+    tf.keras.layers.Lambda(lambda x: tf.multiply(x, 2), name='custom_layer'),
+    tf.keras.layers.Dense(1, activation='sigmoid', name='output_layer')
+])
+tf.keras.models.save_model(model, 'model.h5')
+new_model = load_model(model_dir + model_name, custom_objects={'CustomLayer': CustomLayer, 'iou_coefficient': iou_coefficient, 'jaccard_index': jaccard_index})
+
+print(new_model.summary())
+
+model.compile(optimizer="adam", loss="categorical_crossentropy",
+              metrics=["accuracy", iou_coefficient, jaccard_index])
+
+# =====================================================
+# Predict
+
+def rgb_encode_mask(mask):
+    # initialize rgb image with equal spatial resolution
+    rgb_encode_image = np.zeros((mask.shape[0], mask.shape[1], 3))
+
+    # iterate over MaskColorMap
+    for j, cls in enumerate(MaskColorMap):
+        # convert single integer channel to RGB channels
+        rgb_encode_image[(mask == j)] = np.array(cls.value) / 255.
+    return rgb_encode_image
+
+
+for i in range(20):
+    # choose random number from 0 to test set size
+    test_img_number = i
+
+    # extract test input image
+    test_img = X_test[test_img_number]
+
+    # ground truth test label converted from one-hot to integer encoding
+    ground_truth = np.argmax(Y_test[i], axis=-1)
+
+    # expand first dimension as U-Net requires (m, h, w, nc) input shape
+    test_img_input = np.expand_dims(test_img, 0)
+
+    # make prediction with model and remove extra dimension
+    prediction = np.squeeze(new_model.predict(test_img_input))
+
+    # convert softmax probabilities to integer values
+    predicted_img = np.argmax(prediction, axis=-1)
+
+    # convert integer encoding to rgb values
+    rgb_image = rgb_encode_mask(predicted_img)
+    rgb_ground_truth = rgb_encode_mask(ground_truth)
+
+    # visualize model predictions
+    display_images(
+        [test_img, rgb_ground_truth, rgb_image],
+        rows=1, titles=['Aerial', 'Ground Truth', 'Prediction'])
+
+
+
+plt.imshow(X_test[0])
+
+plt.imshow(rgb_encode_mask(Y_test[0]))
